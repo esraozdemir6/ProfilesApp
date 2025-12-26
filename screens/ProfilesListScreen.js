@@ -6,33 +6,45 @@ import {
   Pressable,
   StyleSheet,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { api } from '../api/client';
 
 export default function ProfilesListScreen({ navigation }) {
   const [profiles, setProfiles] = useState([]);
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
+
+  const [loading, setLoading] = useState(false);      // pagination / load more
+  const [refreshing, setRefreshing] = useState(false); // pull-to-refresh
   const [error, setError] = useState(null);
   const [hasMore, setHasMore] = useState(true);
 
-  const fetchProfiles = async () => {
-    if (loading || !hasMore) return;
+  // fetch function (supports refresh)
+  const fetchProfiles = async ({ pageToLoad = page, replace = false } = {}) => {
+    if (loading || (!hasMore && !replace)) return;
 
     setLoading(true);
     setError(null);
 
     try {
-      const res = await api.get(`/profiles?page=${page}&limit=10`);
+      const res = await api.get(`/profiles?page=${pageToLoad}&limit=10`);
+      const data = res.data ?? [];
 
-      if (res.data.length === 0) {
+      if (replace) {
+        setProfiles(data);
+      } else {
+        setProfiles((prev) => [...prev, ...data]);
+      }
+
+      if (data.length === 0) {
         setHasMore(false);
       } else {
-        setProfiles((prev) => [...prev, ...res.data]);
-        setPage((prev) => prev + 1);
+        setHasMore(true);
+        setPage(pageToLoad + 1);
       }
     } catch (err) {
-      setError('Failed to load profiles. Check your connection.');
+      // interceptor Error throws => err.message is meaningful
+      setError(err?.message || 'Failed to load profiles.');
       console.error(err);
     } finally {
       setLoading(false);
@@ -40,8 +52,17 @@ export default function ProfilesListScreen({ navigation }) {
   };
 
   useEffect(() => {
-    fetchProfiles();
+    // initial load
+    fetchProfiles({ pageToLoad: 1, replace: true });
   }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setHasMore(true);
+    setPage(1);
+    await fetchProfiles({ pageToLoad: 1, replace: true });
+    setRefreshing(false);
+  };
 
   const renderItem = ({ item }) => (
     <Pressable
@@ -54,7 +75,8 @@ export default function ProfilesListScreen({ navigation }) {
   );
 
   const renderFooter = () => {
-    if (!loading) return null;
+    // only show footer spinner when loading more (not on first load)
+    if (!loading || profiles.length === 0) return null;
     return (
       <View style={styles.footer}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -62,11 +84,34 @@ export default function ProfilesListScreen({ navigation }) {
     );
   };
 
+  const renderEmpty = () => {
+    if (loading) return null;
+    return (
+      <View style={styles.emptyContainer}>
+        <Text style={styles.emptyText}>No profiles found</Text>
+      </View>
+    );
+  };
+
+  // Initial loading screen (better UX)
+  if (loading && profiles.length === 0) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+        <Text style={styles.loadingText}>Loading profiles...</Text>
+      </View>
+    );
+  }
+
+  // Error screen when nothing loaded yet
   if (error && profiles.length === 0) {
     return (
       <View style={styles.centerContainer}>
         <Text style={styles.errorText}>{error}</Text>
-        <Pressable style={styles.retryButton} onPress={fetchProfiles}>
+        <Pressable
+          style={styles.retryButton}
+          onPress={() => fetchProfiles({ pageToLoad: 1, replace: true })}
+        >
           <Text style={styles.retryText}>Retry</Text>
         </Pressable>
       </View>
@@ -79,10 +124,14 @@ export default function ProfilesListScreen({ navigation }) {
         data={profiles}
         keyExtractor={(item) => item.id.toString()}
         renderItem={renderItem}
-        onEndReached={fetchProfiles}
+        onEndReached={() => fetchProfiles({ pageToLoad: page, replace: false })}
         onEndReachedThreshold={0.5}
         ListFooterComponent={renderFooter}
+        ListEmptyComponent={renderEmpty}
         contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       />
     </View>
   );
@@ -127,6 +176,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
   },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#666',
+  },
   errorText: {
     fontSize: 16,
     color: '#d32f2f',
@@ -143,5 +197,13 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  emptyContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
   },
 });
